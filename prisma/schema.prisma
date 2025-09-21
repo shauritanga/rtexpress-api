@@ -1,0 +1,402 @@
+// Prisma schema for RT Express backend
+// MySQL provider
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "mysql"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id           String     @id @default(cuid())
+  email        String     @unique
+  passwordHash String
+  name         String
+  phone        String?
+  status       UserStatus @default(ACTIVE)
+  avatarUrl    String?
+
+  // OTP fields
+  otpEnabled     Boolean   @default(false)
+  otpSecret      String?
+  otpAttempts    Int       @default(0)
+  otpLastAttempt DateTime?
+
+  // Dynamic role
+  roleId String?
+  role   Role?   @relation(fields: [roleId], references: [id])
+
+  createdAt DateTime   @default(now())
+  updatedAt DateTime   @updatedAt
+  // Relations
+  customers Customer[]
+  otpCodes  OtpCode[]
+  AuditLog  AuditLog[]
+
+  requestedTickets SupportTicket[] @relation("TicketRequester")
+  assignedTickets  SupportTicket[] @relation("TicketAssignee")
+
+  SupportMessage        SupportMessage[]
+  SupportAttachment     SupportAttachment[]
+  SupportCannedResponse SupportCannedResponse[]
+  SupportArticle        SupportArticle[]
+
+  // Notifications
+  notifications Notification[]
+}
+
+model Role {
+  id           String           @id @default(cuid())
+  name         String           @unique
+  description  String?
+  isSystemRole Boolean          @default(false)
+  permissions  RolePermission[]
+  users        User[]
+  createdAt    DateTime         @default(now())
+  updatedAt    DateTime         @updatedAt
+}
+
+model Permission {
+  id          String           @id @default(cuid())
+  name        String           @unique
+  resource    String
+  action      String
+  description String?
+  roles       RolePermission[]
+  createdAt   DateTime         @default(now())
+  updatedAt   DateTime         @updatedAt
+}
+
+model RolePermission {
+  roleId       String
+  permissionId String
+  role         Role       @relation(fields: [roleId], references: [id])
+  permission   Permission @relation(fields: [permissionId], references: [id])
+
+  @@id([roleId, permissionId])
+}
+
+enum UserStatus {
+  ACTIVE
+  SUSPENDED
+}
+
+model Customer {
+  id                String          @id @default(cuid())
+  customerNumber    Int             @unique @default(autoincrement())
+  type              CustomerType
+  status            CustomerStatus  @default(ACTIVE)
+  firstName         String?
+  lastName          String?
+  companyName       String?
+  email             String          @unique
+  phone             String?
+  preferredCurrency String          @default("TZS")
+  // Address
+  street            String?
+  city              String?
+  state             String?
+  zipCode           String?
+  country           String?
+  // Metrics
+  totalOrders       Int             @default(0)
+  totalSpent        Decimal         @default(0)
+  averageOrderValue Decimal         @default(0)
+  createdAt         DateTime        @default(now())
+  updatedAt         DateTime        @updatedAt
+  // Relations
+  ownerId           String?
+  owner             User?           @relation(fields: [ownerId], references: [id])
+  shipments         Shipment[]
+  invoices          Invoice[]
+  SupportTicket     SupportTicket[]
+
+  @@unique([ownerId])
+}
+
+enum CustomerType {
+  INDIVIDUAL
+  BUSINESS
+}
+
+enum CustomerStatus {
+  ACTIVE
+  PENDING
+  SUSPENDED
+  INACTIVE
+}
+
+model Shipment {
+  id                String    @id @default(cuid())
+  trackingNumber    String    @unique
+  customerId        String
+  customer          Customer  @relation(fields: [customerId], references: [id])
+  description       String
+  packageType       String
+  weightValue       Decimal
+  weightUnit        String
+  length            Decimal?
+  width             Decimal?
+  height            Decimal?
+  dimensionUnit     String?
+  value             Decimal
+  currency          String    @default("TZS")
+  priority          String    @default("medium")
+  status            String    @default("Processing")
+  originStreet      String
+  originCity        String
+  originState       String
+  originZip         String
+  originCountry     String
+  destStreet        String
+  destCity          String
+  destState         String
+  destZip           String
+  destCountry       String
+  pickupDate        DateTime?
+  estimatedDelivery DateTime?
+  actualDelivery    DateTime?
+  insuranceValue    Decimal?
+  signatureRequired Boolean   @default(false)
+  createdAt         DateTime  @default(now())
+  updatedAt         DateTime  @updatedAt
+}
+
+model Invoice {
+  id             String        @id @default(cuid())
+  invoiceNumber  String        @unique
+  customerId     String
+  customer       Customer      @relation(fields: [customerId], references: [id])
+  status         String        @default("draft")
+  subtotal       Decimal       @default(0)
+  taxAmount      Decimal       @default(0)
+  discountAmount Decimal       @default(0)
+  totalAmount    Decimal       @default(0)
+  paidAmount     Decimal       @default(0)
+  balanceAmount  Decimal       @default(0)
+  currency       String        @default("TZS")
+  issueDate      DateTime
+  dueDate        DateTime
+  notes          String?
+  createdAt      DateTime      @default(now())
+  updatedAt      DateTime      @updatedAt
+  items          InvoiceItem[]
+  payments       Payment[]
+}
+
+model InvoiceItem {
+  id          String  @id @default(cuid())
+  invoiceId   String
+  invoice     Invoice @relation(fields: [invoiceId], references: [id])
+  description String
+  quantity    Int
+
+  unitPrice Decimal
+  discount  Decimal @default(0)
+  total     Decimal @default(0)
+}
+
+model Payment {
+  id            String   @id @default(cuid())
+  invoiceId     String
+  invoice       Invoice  @relation(fields: [invoiceId], references: [id])
+  amount        Decimal
+  currency      String   @default("TZS")
+  method        String
+  transactionId String?
+  status        String   @default("completed")
+  createdAt     DateTime @default(now())
+}
+
+model BookingRequest {
+  id               String    @id @default(cuid())
+  fullName         String
+  phone            String
+  email            String
+  itemDescription  String
+  pickupLocation   String
+  deliveryLocation String
+  notes            String?
+  consent          Boolean   @default(false)
+  consentAt        DateTime?
+  status           String    @default("pending") // pending | confirmed | rejected | completed | converted
+  createdAt        DateTime  @default(now())
+  updatedAt        DateTime  @updatedAt
+
+  @@index([status])
+  @@index([createdAt])
+}
+
+model OtpCode {
+  id        String   @id @default(cuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id])
+  code      String
+  expiresAt DateTime
+  used      Boolean  @default(false)
+  createdAt DateTime @default(now())
+
+  @@index([userId, expiresAt])
+  @@index([code, userId])
+}
+
+model AuditLog {
+  id         String   @id @default(cuid())
+  actorId    String
+  actor      User     @relation(fields: [actorId], references: [id])
+  action     String
+  entityType String
+  entityId   String?
+  details    Json?
+  createdAt  DateTime @default(now())
+
+  @@index([createdAt])
+}
+
+// Support ticketing system models
+model SupportTicket {
+  id                  String              @id @default(cuid())
+  number              Int                 @unique @default(autoincrement())
+  subject             String
+  category            String // billing | shipping | technical | general
+  priority            String // low | normal | high | urgent
+  status              String // open | in_progress | resolved | closed
+  customerId          String?
+  customer            Customer?           @relation(fields: [customerId], references: [id])
+  requesterUserId     String?
+  requester           User?               @relation("TicketRequester", fields: [requesterUserId], references: [id])
+  assignedToUserId    String?
+  assignee            User?               @relation("TicketAssignee", fields: [assignedToUserId], references: [id])
+  slaDueAt            DateTime?
+  firstResponseAt     DateTime?
+  resolvedAt          DateTime?
+  closedAt            DateTime?
+  satisfactionScore   Int?
+  satisfactionComment String?
+  autoClosedAt        DateTime?
+  createdAt           DateTime            @default(now())
+  updatedAt           DateTime            @updatedAt
+  messages            SupportMessage[]
+  attachments         SupportAttachment[]
+
+  @@index([status, priority, category])
+  @@index([assignedToUserId])
+  @@index([createdAt])
+  @@index([requesterUserId])
+  @@index([customerId])
+  @@index([status, assignedToUserId])
+}
+
+model SupportMessage {
+  id           String              @id @default(cuid())
+  ticketId     String
+  ticket       SupportTicket       @relation(fields: [ticketId], references: [id])
+  authorUserId String?
+  author       User?               @relation(fields: [authorUserId], references: [id])
+  authorType   String // customer | staff | system
+  bodyText     String?
+  bodyHtml     String?
+  internal     Boolean             @default(false)
+  createdAt    DateTime            @default(now())
+  attachments  SupportAttachment[]
+
+  @@index([ticketId, createdAt])
+  @@index([authorUserId])
+}
+
+model SupportAttachment {
+  id               String          @id @default(cuid())
+  ticketId         String
+  ticket           SupportTicket   @relation(fields: [ticketId], references: [id])
+  messageId        String?
+  message          SupportMessage? @relation(fields: [messageId], references: [id])
+  filename         String
+  mimeType         String
+  size             Int
+  storageKey       String // server/uploads/<...>
+  uploadedByUserId String?
+  uploadedBy       User?           @relation(fields: [uploadedByUserId], references: [id])
+  createdAt        DateTime        @default(now())
+
+  @@index([ticketId])
+  @@index([messageId])
+}
+
+model SupportCannedResponse {
+  id              String   @id @default(cuid())
+  title           String
+  contentText     String?
+  contentHtml     String?
+  category        String?
+  createdByUserId String?
+  createdBy       User?    @relation(fields: [createdByUserId], references: [id])
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  @@index([category])
+}
+
+model SupportArticle {
+  id              String   @id @default(cuid())
+  title           String
+  slug            String   @unique
+  category        String?
+  contentHtml     String?
+  contentText     String?
+  tags            Json?
+  isPublished     Boolean  @default(true)
+  createdByUserId String?
+  createdBy       User?    @relation(fields: [createdByUserId], references: [id])
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  @@index([isPublished, category])
+}
+
+model Notification {
+  id        String               @id @default(cuid())
+  userId    String
+  user      User                 @relation(fields: [userId], references: [id], onDelete: Cascade)
+  type      NotificationType
+  title     String
+  message   String               @db.Text
+  data      Json? // Additional data for the notification (e.g., shipment ID, invoice ID)
+  read      Boolean              @default(false)
+  readAt    DateTime?
+  actionUrl String? // URL to navigate to when notification is clicked
+  priority  NotificationPriority @default(NORMAL)
+  category  String? // Category for grouping (e.g., "shipment", "invoice", "support")
+  expiresAt DateTime? // Optional expiration date for notifications
+  createdAt DateTime             @default(now())
+  updatedAt DateTime             @updatedAt
+
+  @@index([userId, read])
+  @@index([userId, createdAt])
+  @@index([type, createdAt])
+  @@index([category, createdAt])
+  @@index([expiresAt])
+}
+
+enum NotificationType {
+  INFO
+  SUCCESS
+  WARNING
+  ERROR
+  SHIPMENT_UPDATE
+  INVOICE_UPDATE
+  PAYMENT_UPDATE
+  SUPPORT_UPDATE
+  BOOKING_UPDATE
+  SYSTEM_ALERT
+  PROMOTIONAL
+}
+
+enum NotificationPriority {
+  LOW
+  NORMAL
+  HIGH
+  URGENT
+}
