@@ -9,8 +9,9 @@
     "esModuleInterop": true,
     "forceConsistentCasingInFileNames": true,
     "skipLibCheck": true,
+    "typeRoots": ["node_modules/@types"],
     "resolveJsonModule": true,
-    "types": ["node", "jest"],
+    "types": ["node","jest"],
     "sourceMap": true
   },
   "include": ["src/**/*"],
