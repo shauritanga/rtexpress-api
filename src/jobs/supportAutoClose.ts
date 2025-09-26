@@ -6,7 +6,12 @@ export let autoCloseLastRunAt: Date | null = null
 
 export function scheduleSupportAutoClose() {
   const days = parseInt(process.env.SUPPORT_AUTO_CLOSE_DAYS || '7', 10)
-  const cronExpr = process.env.SUPPORT_AUTO_CLOSE_CRON || '0 2 * * *' // daily at 02:00
+  const cronExprRaw = process.env.SUPPORT_AUTO_CLOSE_CRON || '0 2 * * *' // daily at 02:00
+  const cronExpr = String(cronExprRaw).trim().replace(/^\"|\"$/g, '')
+  if (!cron.validate(cronExpr)) {
+    console.error('[support-auto-close] invalid cron expression, skipping schedule:', cronExpr)
+    return
+  }
 
   autoCloseScheduled = true
 

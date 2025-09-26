@@ -51,8 +51,17 @@ export let slaMonitorScheduled = false
 export let slaMonitorLastRunAt: Date | null = null
 
 export function scheduleSupportSlaMonitor() {
-  const cronExpr = (process.env as any).SUPPORT_SLA_MONITOR_CRON || '*/15 * * * *' // every 15 minutes
+  const cronExprRaw = (process.env as any).SUPPORT_SLA_MONITOR_CRON || '*/15 * * * *' // every 15 minutes
   const monitorEnabled = ((process.env as any).SUPPORT_SLA_MONITOR_ENABLED || 'true').toLowerCase() !== 'false'
+  const cronExpr = String(cronExprRaw).trim().replace(/^"|"$/g, '')
+  if (!monitorEnabled) {
+    console.log('[support-sla-monitor] disabled via env')
+    return
+  }
+  if (!cron.validate(cronExpr)) {
+    console.error('[support-sla-monitor] invalid cron expression, skipping schedule:', cronExpr)
+    return
+  }
   slaMonitorScheduled = true
   const persistEnabled = ((process.env as any).SUPPORT_SLA_PERSIST_DEDUP || 'false').toLowerCase() === 'true'
   cron.schedule(cronExpr, async () => {
