@@ -1,0 +1,9 @@
+# Minimal .htaccess to pass OPTIONS preflight to Passenger/Node
+
+# Apache will not answer OPTIONS; Node/Express CORS will
+
+<IfModule mod_rewrite.c>
+  RewriteEngine On
+  RewriteCond %{REQUEST_METHOD} =OPTIONS
+  RewriteRule ^ - [L]
+</IfModule>

@@ -54,15 +54,28 @@ function buildPermissions() {
 }
 
 async function ensureSystemRoles() {
-  const roles = ['ADMIN', 'MANAGER', 'STAFF', 'CUSTOMER'];
+  const systemRoles = ['ADMIN', 'CUSTOMER']; // Only ADMIN and CUSTOMER are protected system roles
+  const operationalRoles = ['MANAGER', 'STAFF']; // These can be deleted
   const map = {};
-  for (const name of roles) {
+
+  // Create/update system roles (protected)
+  for (const name of systemRoles) {
     map[name] = await prisma.role.upsert({
       where: { name },
       update: { isSystemRole: true },
       create: { name, isSystemRole: true, description: `${name} system role` },
     });
   }
+
+  // Create/update operational roles (deletable)
+  for (const name of operationalRoles) {
+    map[name] = await prisma.role.upsert({
+      where: { name },
+      update: { isSystemRole: false },
+      create: { name, isSystemRole: false, description: `${name} operational role` },
+    });
+  }
+
   return map;
 }
 
