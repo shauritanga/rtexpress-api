@@ -277,29 +277,32 @@ model AuditLog {
 
 // Support ticketing system models
 model SupportTicket {
-  id                  String              @id @default(cuid())
-  number              Int                 @unique @default(autoincrement())
-  subject             String
-  category            String // billing | shipping | technical | general
-  priority            String // low | normal | high | urgent
-  status              String // open | in_progress | resolved | closed
-  customerId          String?
-  customer            Customer?           @relation(fields: [customerId], references: [id])
-  requesterUserId     String?
-  requester           User?               @relation("TicketRequester", fields: [requesterUserId], references: [id])
-  assignedToUserId    String?
-  assignee            User?               @relation("TicketAssignee", fields: [assignedToUserId], references: [id])
-  slaDueAt            DateTime?
-  firstResponseAt     DateTime?
-  resolvedAt          DateTime?
-  closedAt            DateTime?
-  satisfactionScore   Int?
-  satisfactionComment String?
-  autoClosedAt        DateTime?
-  createdAt           DateTime            @default(now())
-  updatedAt           DateTime            @updatedAt
-  messages            SupportMessage[]
-  attachments         SupportAttachment[]
+  id                      String              @id @default(cuid())
+  number                  Int                 @unique @default(autoincrement())
+  subject                 String
+  category                String // billing | shipping | technical | general
+  priority                String // low | normal | high | urgent
+  status                  String // open | in_progress | resolved | closed
+  customerId              String?
+  customer                Customer?           @relation(fields: [customerId], references: [id])
+  requesterUserId         String?
+  requester               User?               @relation("TicketRequester", fields: [requesterUserId], references: [id])
+  assignedToUserId        String?
+  assignee                User?               @relation("TicketAssignee", fields: [assignedToUserId], references: [id])
+  slaDueAt                DateTime?
+  firstResponseAt         DateTime?
+  resolvedAt              DateTime?
+  closedAt                DateTime?
+  // Persisted de-duplication timestamps for SLA alerts
+  lastSlaWarnNotifiedAt   DateTime?
+  lastSlaBreachNotifiedAt DateTime?
+  satisfactionScore       Int?
+  satisfactionComment     String?
+  autoClosedAt            DateTime?
+  createdAt               DateTime            @default(now())
+  updatedAt               DateTime            @updatedAt
+  messages                SupportMessage[]
+  attachments             SupportAttachment[]
 
   @@index([status, priority, category])
   @@index([assignedToUserId])
