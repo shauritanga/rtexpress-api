@@ -13,7 +13,7 @@ const EventEmitter = require('events');
 class WebSocketManager extends EventEmitter {
   constructor(server, options = {}) {
     super();
-    
+
     this.options = {
       maxConnections: options.maxConnections || 1000,
       heartbeatInterval: options.heartbeatInterval || 30000,
@@ -48,20 +48,37 @@ class WebSocketManager extends EventEmitter {
     this.wss = new WebSocketServer({
       noServer: true,
       path: '/ws',
-      perMessageDeflate: {
-        // Enable compression but with safe defaults
-        threshold: 1024,
-        concurrencyLimit: 10,
-        memLevel: 7,
-        serverMaxWindowBits: 15,
-        clientMaxWindowBits: 15,
-      },
+      // Force-disable per-message deflate; some stacks mis-negotiate and cause RSV1/opcode errors
+      perMessageDeflate: false,
       maxPayload: this.options.maxMessageSize,
       skipUTF8Validation: false, // Keep validation for security
     });
 
+    // Ensure response never advertises compression extensions
+    this.wss.on('headers', (headers, request) => {
+      try {
+        for (let i = headers.length - 1; i >= 0; i--) {
+          if (/^sec-websocket-extensions:/i.test(headers[i])) {
+            headers.splice(i, 1);
+          }
+        }
+        console.log('WS response headers:', headers);
+      } catch (e) {
+        console.log('WS headers filter error:', e?.message || e);
+      }
+    });
+
+
     // Handle upgrade requests with proper validation
     server.on('upgrade', (request, socket, head) => {
+      try {
+        const extHdr = request.headers['sec-websocket-extensions'];
+        if (extHdr) {
+          console.log('WS upgrade requested with extensions:', extHdr);
+        }
+        // Ensure we never negotiate compression server-side
+        delete request.headers['sec-websocket-extensions'];
+      } catch {}
       this.handleUpgrade(request, socket, head);
     });
 
@@ -74,7 +91,7 @@ class WebSocketManager extends EventEmitter {
   async handleUpgrade(request, socket, head) {
     try {
       const url = new URL(request.url, `http://${request.headers.host}`);
-      
+
       // Only handle our WebSocket path
       if (url.pathname !== '/ws') {
         socket.destroy();
@@ -89,7 +106,7 @@ class WebSocketManager extends EventEmitter {
 
       // Verify client with enhanced validation
       const verification = await this.verifyClient(request);
-      
+
       if (verification.success) {
         this.wss.handleUpgrade(request, socket, head, (ws) => {
           ws.userId = verification.userId;
@@ -125,7 +142,7 @@ class WebSocketManager extends EventEmitter {
       // Verify JWT token
       const secret = process.env.JWT_ACCESS_SECRET || process.env.JWT_SECRET || 'your-secret-key';
       const decoded = jwt.verify(token, secret);
-      
+
       const userId = decoded.sub || decoded.userId || decoded.id;
       const userRole = decoded.role || decoded.userRole;
       const tokenExp = decoded.exp;
@@ -133,7 +150,7 @@ class WebSocketManager extends EventEmitter {
       // Check if token is expiring soon
       const now = Math.floor(Date.now() / 1000);
       const timeUntilExpiry = (tokenExp - now) * 1000;
-      
+
       if (timeUntilExpiry < 0) {
         return { success: false, code: 401, message: 'Token expired' };
       }
@@ -156,7 +173,7 @@ class WebSocketManager extends EventEmitter {
       } else if (error.name === 'JsonWebTokenError') {
         return { success: false, code: 401, message: 'Invalid token' };
       }
-      
+
       console.error('❌ Token verification error:', error);
       return { success: false, code: 500, message: 'Authentication error' };
     }
@@ -186,7 +203,7 @@ class WebSocketManager extends EventEmitter {
   rejectConnection(socket, code, message) {
     console.log(`🚫 WebSocket connection rejected: ${code} - ${message}`);
     this.connectionMetrics.rejectedConnections++;
-    
+
     if (socket.writable) {
       socket.write(`HTTP/1.1 ${code} ${message}\r\n\r\n`);
     }
@@ -306,8 +323,8 @@ class WebSocketManager extends EventEmitter {
     try {
       switch (message.type) {
         case 'ping':
-          this.sendToClient(ws, { 
-            type: 'pong', 
+          this.sendToClient(ws, {
+            type: 'pong',
             timestamp: new Date().toISOString(),
             serverTime: Date.now()
           });

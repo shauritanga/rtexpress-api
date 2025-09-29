@@ -102,6 +102,16 @@ function createApp() {
   const limiter = rateLimit({ windowMs: 15 * 60 * 1000, max: 200 });
   app.use(limiter);
 
+
+	  // Disable ETag + prevent caching for API responses to avoid 304 on XHR
+	  app.set('etag', false);
+	  app.use((req, res, next) => {
+	    // Keep caching for static uploads; disable for API endpoints
+	    if (req.path && req.path.startsWith('/uploads')) return next();
+	    res.setHeader('Cache-Control', 'no-store');
+	    next();
+	  });
+
   // Routes
   app.use('/health', healthRouter);
   // Public non-auth routes

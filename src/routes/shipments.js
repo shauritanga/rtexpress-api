@@ -388,54 +388,51 @@ router.patch('/:id/status', requireRole('ADMIN', 'STAFF'), async (req, res) => {
       }
     }
 
-    // Update the shipment status and return expanded data immediately
-    const full = await prisma.shipment.update({
+    // Update the shipment status (fast) and return 204 No Content immediately
+    await prisma.shipment.update({
       where: { id },
       data: updateData,
-      include: {
-        customer: {
-          select: {
-            id: true,
-            customerNumber: true,
-            firstName: true,
-            lastName: true,
-            companyName: true,
-            email: true,
-            phone: true,
-            type: true,
-            ownerId: true,
-          }
-        },
-        events: { orderBy: { createdAt: 'asc' } }
-      }
+      select: { id: true },
     });
 
-    // Respond first to avoid blocking on non-critical work
-    res.json(full);
+    // Some proxies mishandle 204; respond with tiny JSON instead
+    res.status(200).json({ ok: true });
 
     // Fire-and-forget: create status event and send notification (non-blocking)
-    setImmediate(() => {
-      const meta = getEventMeta(status);
-      prisma.shipmentEvent.create({
-        data: {
-          shipmentId: id,
-          status,
-          title: meta.title,
-          description: meta.description,
-        }
-      }).catch((err) => {
-        console.error('Error creating status event:', err);
-      });
-
-      if (full?.customer?.ownerId) {
-        sendShipmentNotification(
-          full.customer.ownerId,
-          full.trackingNumber,
-          status,
-          full.id
-        ).catch((notificationError) => {
-          console.error('Error sending notification:', notificationError);
+    setImmediate(async () => {
+      try {
+        const meta = getEventMeta(status);
+        await prisma.shipmentEvent.create({
+          data: {
+            shipmentId: id,
+            status,
+            title: meta.title,
+            description: meta.description,
+          }
+        }).catch((err) => {
+          console.error('Error creating status event:', err);
         });
+
+        // Fetch minimal fields for notification
+        const fresh = await prisma.shipment.findUnique({
+          where: { id },
+          select: {
+            id: true,
+            trackingNumber: true,
+            customer: { select: { ownerId: true } }
+          }
+        });
+
+        if (fresh?.customer?.ownerId) {
+          await sendShipmentNotification(
+            fresh.customer.ownerId,
+            fresh.trackingNumber,
+            status,
+            fresh.id
+          );
+        }
+      } catch (notificationError) {
+        console.error('Error in post-update tasks:', notificationError);
       }
     });
   } catch (error) {
