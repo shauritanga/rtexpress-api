@@ -321,7 +321,7 @@ router.get('/:id', async (req, res) => {
 router.patch('/:id/status', requireRole('ADMIN', 'STAFF'), async (req, res) => {
   try {
     const { id } = req.params;
-    const { status } = req.body;
+    const { status, actualDelivery } = req.body;
 
     if (!status) {
       return res.status(400).json({ error: 'Status is required' });
@@ -377,31 +377,21 @@ router.patch('/:id/status', requireRole('ADMIN', 'STAFF'), async (req, res) => {
       updatedAt: new Date()
     };
 
-    // Auto-set actualDelivery date when status is "Delivered"
+    // Handle actualDelivery date
     if (status === 'Delivered') {
-      updateData.actualDelivery = new Date();
+      if (actualDelivery) {
+        // Use provided actualDelivery date
+        updateData.actualDelivery = new Date(actualDelivery);
+      } else {
+        // Auto-set to current time if not provided
+        updateData.actualDelivery = new Date();
+      }
     }
 
-    // Update the shipment status first
-    const updated = await prisma.shipment.update({
+    // Update the shipment status and return expanded data immediately
+    const full = await prisma.shipment.update({
       where: { id },
       data: updateData,
-    });
-
-    // Create a status event
-    const meta = getEventMeta(status);
-    await prisma.shipmentEvent.create({
-      data: {
-        shipmentId: id,
-        status,
-        title: meta.title,
-        description: meta.description,
-      }
-    });
-
-    // Fetch full shipment with relations and ordered events
-    const full = await prisma.shipment.findUnique({
-      where: { id },
       include: {
         customer: {
           select: {
@@ -420,22 +410,34 @@ router.patch('/:id/status', requireRole('ADMIN', 'STAFF'), async (req, res) => {
       }
     });
 
-    // Send notification to customer about status update
-    if (full?.customer?.ownerId) {
-      try {
-        await sendShipmentNotification(
+    // Respond first to avoid blocking on non-critical work
+    res.json(full);
+
+    // Fire-and-forget: create status event and send notification (non-blocking)
+    setImmediate(() => {
+      const meta = getEventMeta(status);
+      prisma.shipmentEvent.create({
+        data: {
+          shipmentId: id,
+          status,
+          title: meta.title,
+          description: meta.description,
+        }
+      }).catch((err) => {
+        console.error('Error creating status event:', err);
+      });
+
+      if (full?.customer?.ownerId) {
+        sendShipmentNotification(
           full.customer.ownerId,
           full.trackingNumber,
           status,
           full.id
-        );
-      } catch (notificationError) {
-        console.error('Error sending notification:', notificationError);
-        // Don't fail the request if notification fails
+        ).catch((notificationError) => {
+          console.error('Error sending notification:', notificationError);
+        });
       }
-    }
-
-    res.json(full);
+    });
   } catch (error) {
     console.error('Error updating shipment status:', error);
     if (error.code === 'P2025') {

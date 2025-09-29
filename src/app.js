@@ -49,7 +49,11 @@ function createApp() {
       : false,
   }));
 
-  const allowedOrigins = env.CORS_ALLOWED_ORIGINS ? env.CORS_ALLOWED_ORIGINS.split(',').map(s => s.trim()).filter(Boolean) : null;
+  const allowedOrigins = env.CORS_ALLOWED_ORIGINS
+    ? env.CORS_ALLOWED_ORIGINS.split(',').map(s => s.trim()).filter(Boolean)
+    : (env.NODE_ENV !== 'production'
+      ? ['http://localhost:3000','http://127.0.0.1:3000','http://localhost:5173','http://127.0.0.1:5173']
+      : null);
   app.use(cors({
     origin: allowedOrigins ? ((origin, cb) => {
       if (!origin) return cb(null, true);
