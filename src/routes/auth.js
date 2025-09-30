@@ -952,11 +952,38 @@ router.post('/admin/roles/:id/permissions', authenticate, requirePermissions(['r
   res.json({ message: 'Role permissions updated' });
 });
 
-// Assign role to user
+// Assign role to user (restricted)
 router.patch('/admin/users/:id/role', authenticate, requirePermissions(['users:assign_role','users:manage'], true), async (req, res) => {
   const userId = String(req.params.id);
   const roleId = String(req.body?.roleId || '');
   if (!roleId) return res.status(400).json({ error: 'Role ID required' });
+
+  // Load target role and current user with role
+  const [targetRole, currentUser] = await Promise.all([
+    prisma.role.findUnique({ where: { id: roleId } }),
+    prisma.user.findUnique({ where: { id: userId }, include: { role: true } })
+  ]);
+
+  if (!targetRole) return res.status(404).json({ error: 'Role not found' });
+
+  const currentRoleName = (currentUser?.role?.name || '').toUpperCase();
+  const targetRoleName = (targetRole.name || '').toUpperCase();
+
+  // Restrict changing roles for CUSTOMER and ADMIN users
+  if (currentRoleName === 'CUSTOMER' || currentRoleName === 'ADMIN') {
+    return res.status(400).json({ error: 'Cannot change role of CUSTOMER or ADMIN users' });
+  }
+
+  // Restrict assigning CUSTOMER or ADMIN to any user via this endpoint
+  if (targetRoleName === 'CUSTOMER' || targetRoleName === 'ADMIN') {
+    return res.status(400).json({ error: 'Cannot assign CUSTOMER or ADMIN via this endpoint' });
+  }
+
+  // Optional safety: prevent self-demotion via this endpoint
+  if (userId === req.user.sub) {
+    return res.status(400).json({ error: 'Cannot change your own role here' });
+  }
+
   const user = await prisma.user.update({ where: { id: userId }, data: { roleId } });
   res.json(user);
 });

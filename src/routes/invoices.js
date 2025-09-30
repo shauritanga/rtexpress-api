@@ -53,7 +53,7 @@ function textInBox(doc, x, y, w, h, text, opts = {}) {
 }
 
 function drawRTExpressAirwaybill(doc, invoice, shipment, barcode) {
-  const brandColor = '#2563eb'; // RT Express blue
+  const brandColor = '#f41a1aff'; // RT Express red
   const pageW = doc.page.width;
   const pageH = doc.page.height;
   const margin = 40;
@@ -122,7 +122,7 @@ function drawRTExpressAirwaybill(doc, invoice, shipment, barcode) {
   const rightSectionX = margin + innerW - 200;
   doc.save();
   doc.fillColor(brandColor).fontSize(24).font('Helvetica-Bold');
-  const documentTitle = shipment ? 'SHIPPING INVOICE' : 'INVOICE';
+  const documentTitle = shipment ? 'INVOICE' : 'INVOICE';
   doc.text(documentTitle, rightSectionX, currentY + 10, { width: 200, align: 'right' });
   doc.restore();
 
