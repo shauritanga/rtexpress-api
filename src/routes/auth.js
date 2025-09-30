@@ -7,8 +7,9 @@ const { authenticate, requireAdmin, requirePermissions } = require('../middlewar
 const nodemailer = require('nodemailer');
 const crypto = require('crypto');
 const { sendNewCustomerNotification } = require('../lib/notifications');
+const { logAudit } = require('../lib/audit');
 
-const loginSchema = z.object({ 
+const loginSchema = z.object({
   email: z.string().email(), 
   password: z.string().min(6), 
   rememberMe: z.boolean().optional() 
@@ -507,9 +508,16 @@ router.post('/login', async (req, res) => {
       }
     }
   });
-  if (!user) return res.status(401).json({ error: 'Invalid credentials' });
+  if (!user) {
+    // Audit: login failure for unknown email
+    await logAudit(req, { action: 'AUTH_LOGIN_FAILURE', entityType: 'User', entityId: undefined, details: { email } });
+    return res.status(401).json({ error: 'Invalid credentials' });
+  }
   const ok = await bcrypt.compare(password, user.passwordHash);
-  if (!ok) return res.status(401).json({ error: 'Invalid credentials' });
+  if (!ok) {
+    await logAudit(req, { action: 'AUTH_LOGIN_FAILURE', entityType: 'User', entityId: user.id, details: { email } });
+    return res.status(401).json({ error: 'Invalid credentials' });
+  }
 
   // Check if user is active
   if (user.status !== 'ACTIVE') {
@@ -538,6 +546,7 @@ router.post('/login', async (req, res) => {
       await prisma.user.update({ where: { id: user.id }, data: { otpAttempts: 0, otpLastAttempt: null } });
       try { await sendOtpEmail(user.email, code); } catch (e) { console.error('OTP email error', e); }
       console.log(`[OTP] Generated for user ${user.email}: ${code}`);
+      await logAudit(req, { action: 'AUTH_OTP_ISSUED', entityType: 'User', entityId: user.id, details: { email: user.email } });
       return res.json({ requiresOtp: true, email: user.email, rememberMe });
     }
   }
@@ -554,6 +563,7 @@ router.post('/login', async (req, res) => {
   // Generate tokens and set refresh cookie
   const accessToken = await issueTokensAndSetCookie(res, user, rememberMe);
 
+  await logAudit(req, { action: 'AUTH_LOGIN_SUCCESS', entityType: 'User', entityId: user.id });
   res.json({
     message: 'Login successful',
     accessToken,
@@ -601,17 +611,20 @@ router.post('/change-password-first-login', async (req, res) => {
     });
 
     if (!user) {
+      await logAudit(req, { action: 'AUTH_FORCE_PASSWORD_CHANGE_FAILURE', entityType: 'User', entityId: undefined, details: { email, reason: 'user_not_found' } });
       return res.status(401).json({ error: 'Invalid credentials' });
     }
 
     // Verify current password
     const passwordValid = await bcrypt.compare(currentPassword, user.passwordHash);
     if (!passwordValid) {
+      await logAudit(req, { action: 'AUTH_FORCE_PASSWORD_CHANGE_FAILURE', entityType: 'User', entityId: user.id, details: { email: user.email, reason: 'incorrect_current_password' } });
       return res.status(401).json({ error: 'Current password is incorrect' });
     }
 
     // Check if user is required to change password
     if (!user.mustChangePassword) {
+      await logAudit(req, { action: 'AUTH_FORCE_PASSWORD_CHANGE_FAILURE', entityType: 'User', entityId: user.id, details: { email: user.email, reason: 'not_required' } });
       return res.status(400).json({ error: 'Password change not required' });
     }
 
@@ -630,6 +643,7 @@ router.post('/change-password-first-login', async (req, res) => {
     // Generate tokens and set refresh cookie
     const accessToken = await issueTokensAndSetCookie(res, user, false);
 
+    await logAudit(req, { action: 'AUTH_FORCE_PASSWORD_CHANGE_SUCCESS', entityType: 'User', entityId: user.id });
     res.json({
       message: 'Password changed successfully',
       accessToken,
@@ -675,6 +689,7 @@ router.post('/send-otp', async (req, res) => {
   await prisma.user.update({ where: { id: user.id }, data: { otpAttempts: 0, otpLastAttempt: null } });
   try { await sendOtpEmail(user.email, code); } catch (e) { console.error('OTP email error', e); }
   console.log(`[OTP] Sent on demand for user ${user.email}: ${code}`);
+  await logAudit(req, { action: 'AUTH_OTP_ISSUED', entityType: 'User', entityId: user.id, details: { email: user.email } });
   res.json({ ok: true, message: 'Verification code sent' });
 });
 
@@ -694,6 +709,7 @@ router.post('/resend-otp', async (req, res) => {
   await prisma.user.update({ where: { id: user.id }, data: { otpAttempts: 0, otpLastAttempt: null } });
   try { await sendOtpEmail(user.email, code); } catch (e) { console.error('OTP email error', e); }
   console.log(`[OTP] Re-sent for user ${user.email}`);
+  await logAudit(req, { action: 'AUTH_OTP_ISSUED', entityType: 'User', entityId: user.id, details: { email: user.email, resend: true } });
   res.json({ ok: true, message: 'Verification code sent' });
 });
 
@@ -714,6 +730,7 @@ router.post('/verify-otp', async (req, res) => {
   let last = user.otpLastAttempt ? new Date(user.otpLastAttempt) : undefined;
   if (last && last >= windowStart && attempts >= 5) {
     const mins = Math.ceil((last.getTime() - windowStart.getTime()) / (60 * 1000));
+    await logAudit(req, { action: 'AUTH_OTP_VERIFY_FAILURE', entityType: 'User', entityId: user.id, details: { email: user.email, reason: 'rate_limited', remainingMinutes: mins } });
     return res.status(429).json({ error: `Too many attempts. Please try again in ${mins} minutes.` });
   }
 
@@ -727,6 +744,7 @@ router.post('/verify-otp', async (req, res) => {
     const newAttempts = (last && last >= windowStart) ? attempts + 1 : 1;
     await prisma.user.update({ where: { id: user.id }, data: { otpAttempts: newAttempts, otpLastAttempt: now } });
     const remaining = Math.max(0, 5 - newAttempts);
+    await logAudit(req, { action: 'AUTH_OTP_VERIFY_FAILURE', entityType: 'User', entityId: user.id, details: { email: user.email, reason: 'invalid_code', remainingAttempts: remaining } });
     return res.status(401).json({ error: `Invalid verification code. ${remaining} attempts remaining.` });
   }
 
@@ -736,6 +754,7 @@ router.post('/verify-otp', async (req, res) => {
 
   // Issue tokens now
   const accessToken = await issueTokensAndSetCookie(res, user, rememberMe);
+  await logAudit(req, { action: 'AUTH_OTP_VERIFY_SUCCESS', entityType: 'User', entityId: user.id });
   res.json({
     accessToken,
     user: {
@@ -776,6 +795,7 @@ router.post('/refresh', async (req, res) => {
 
     const accessToken = await issueTokensAndSetCookie(res, user, true);
 
+    await logAudit(req, { action: 'AUTH_REFRESH_SUCCESS', entityType: 'User', entityId: user.id });
     res.json({
       accessToken,
       user: {
@@ -791,7 +811,9 @@ router.post('/refresh', async (req, res) => {
 });
 
 // Logout endpoint
-router.post('/logout', (req, res) => {
+router.post('/logout', async (req, res) => {
+  // Best-effort audit (only logs if req.user exists)
+  await logAudit(req, { action: 'AUTH_LOGOUT', entityType: 'User', entityId: req.user?.sub }, { actorId: req.user?.sub });
   res.clearCookie('refresh_token', { path: '/auth' });
   res.json({ message: 'Logged out successfully' });
 });
@@ -872,6 +894,7 @@ router.post('/admin/roles', authenticate, requirePermissions(['roles:create','ro
   const parsed = roleCreateSchema.safeParse(req.body);
   if (!parsed.success) return res.status(400).json({ error: 'Invalid data', details: parsed.error.issues });
   const role = await prisma.role.create({ data: parsed.data });
+  await logAudit(req, { action: 'ROLE_CREATE', entityType: 'Role', entityId: role.id, details: { name: role.name } });
   res.status(201).json(role);
 });
 
@@ -881,6 +904,7 @@ router.patch('/admin/roles/:id', authenticate, requirePermissions(['roles:update
   const parsed = roleUpdateSchema.safeParse(req.body);
   if (!parsed.success) return res.status(400).json({ error: 'Invalid data', details: parsed.error.issues });
   const role = await prisma.role.update({ where: { id }, data: parsed.data });
+  await logAudit(req, { action: 'ROLE_UPDATE', entityType: 'Role', entityId: id, details: parsed.data });
   res.json(role);
 });
 
@@ -927,6 +951,7 @@ router.post('/admin/permissions', authenticate, requirePermissions(['permissions
   const parsed = permissionCreateSchema.safeParse(req.body);
   if (!parsed.success) return res.status(400).json({ error: 'Invalid data', details: parsed.error.issues });
   const perm = await prisma.permission.create({ data: parsed.data });
+  await logAudit(req, { action: 'PERMISSION_CREATE', entityType: 'Permission', entityId: perm.id, details: parsed.data });
   res.status(201).json(perm);
 });
 
@@ -936,6 +961,7 @@ router.patch('/admin/permissions/:id', authenticate, requirePermissions(['permis
   const parsed = permissionUpdateSchema.safeParse(req.body);
   if (!parsed.success) return res.status(400).json({ error: 'Invalid data', details: parsed.error.issues });
   const perm = await prisma.permission.update({ where: { id }, data: parsed.data });
+  await logAudit(req, { action: 'PERMISSION_UPDATE', entityType: 'Permission', entityId: id, details: parsed.data });
   res.json(perm);
 });
 
@@ -949,6 +975,7 @@ router.post('/admin/roles/:id/permissions', authenticate, requirePermissions(['r
       data: permissionIds.map(permissionId => ({ roleId: id, permissionId }))
     });
   }
+  await logAudit(req, { action: 'ROLE_SET_PERMISSIONS', entityType: 'Role', entityId: id, details: { permissionIds } });
   res.json({ message: 'Role permissions updated' });
 });
 
@@ -985,6 +1012,7 @@ router.patch('/admin/users/:id/role', authenticate, requirePermissions(['users:a
   }
 
   const user = await prisma.user.update({ where: { id: userId }, data: { roleId } });
+  await logAudit(req, { action: 'USER_ROLE_ASSIGN', entityType: 'User', entityId: userId, details: { toRoleId: roleId, fromRole: currentRoleName, toRole: targetRoleName } });
   res.json(user);
 });
 

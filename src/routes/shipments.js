@@ -1,6 +1,7 @@
 const { Router } = require('express');
 const { z } = require('zod');
 const { prisma } = require('../lib/prisma');
+const { logAudit } = require('../lib/audit');
 const { authenticate, requireRole } = require('../middleware/auth');
 const { hasPermission } = require('../lib/permissions');
 const { sendShipmentNotification, sendNewShipmentNotification } = require('../lib/notifications');
@@ -309,6 +310,7 @@ router.get('/:id', async (req, res) => {
       }
     }
 
+    await logAudit(req, { action: 'SHIPMENT_STATUS_UPDATE', entityType: 'Shipment', entityId: id, details: { from: existingShipment.status, to: status, actualDelivery: actualDelivery || null } });
     res.json(shipment);
 
   } catch (error) {
@@ -502,6 +504,7 @@ router.delete('/:id', requireRole('ADMIN', 'STAFF'), async (req, res) => {
       }
     }
 
+    await logAudit(req, { action: 'SHIPMENT_DELETE', entityType: 'Shipment', entityId: existingShipment.id, details: { trackingNumber: existingShipment.trackingNumber, status: existingShipment.status } });
     res.json({
       message: 'Shipment deleted successfully',
       deletedShipment: {
@@ -643,6 +646,7 @@ router.post('/', async (req, res) => {
       }
     });
 
+    await logAudit(req, { action: 'SHIPMENT_CREATE', entityType: 'Shipment', entityId: created.id, details: { trackingNumber, customerId: full.customer?.id } });
     res.status(201).json(full);
   } catch (error) {
     console.error('Error creating shipment:', error);

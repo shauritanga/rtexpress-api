@@ -1,6 +1,7 @@
 const { Router } = require('express');
 const { z } = require('zod');
 const { prisma } = require('../lib/prisma');
+const { logAudit } = require('../lib/audit');
 const { authenticate, requireRole } = require('../middleware/auth');
 const { hasPermission } = require('../lib/permissions');
 const PDFDocument = require('pdfkit');
@@ -587,6 +588,7 @@ router.post('/', async (req, res) => {
     },
     include: { items: true, payments: true, customer: true },
   });
+  await logAudit(req, { action: 'INVOICE_CREATE', entityType: 'Invoice', entityId: invoice.id, details: { customerId: customer.id, invoiceNumber } });
 
   // Add customer information to the response
   const customerName = customer.type === 'INDIVIDUAL'
@@ -665,6 +667,7 @@ router.patch('/:id', async (req, res) => {
 
   const data = req.body;
   const updated = await prisma.invoice.update({ where: { id }, data, include: { items: true, payments: true } });
+  await logAudit(req, { action: 'INVOICE_UPDATE', entityType: 'Invoice', entityId: id, details: { changed: data } });
   res.json(updated);
 });
 
@@ -677,7 +680,10 @@ router.delete('/:id', async (req, res) => {
   const ok = await hasPermission(user.sub, 'invoices:delete');
   if (!ok) return res.status(403).json({ error: 'Forbidden' });
 
+  // Load for audit context then delete
+  const existing = await prisma.invoice.findUnique({ where: { id } });
   await prisma.invoice.delete({ where: { id } });
+  await logAudit(req, { action: 'INVOICE_DELETE', entityType: 'Invoice', entityId: id, details: { invoiceNumber: existing?.invoiceNumber } });
   res.status(204).send();
 });
 
@@ -713,7 +719,7 @@ router.post('/:id/payments', async (req, res) => {
   const newPaid = paidAmount._sum.amount ?? 0;
   const newBalance = invoice.totalAmount - newPaid;
 
-  const updatedInvoice = await prisma.invoice.update({
+  await prisma.invoice.update({
     where: { id },
     data: {
       paidAmount: newPaid,
@@ -721,6 +727,7 @@ router.post('/:id/payments', async (req, res) => {
       status: newBalance <= 0 ? 'paid' : (invoice.status === 'cancelled' ? invoice.status : invoice.status)
     }
   });
+  await logAudit(req, { action: 'PAYMENT_CREATE', entityType: 'Invoice', entityId: id, details: { amount: parsed.data.amount, currency: parsed.data.currency, method: parsed.data.method, paymentId: payment.id } });
 
   // Send payment notification to customer
   if (invoice.customer?.ownerId) {
@@ -754,6 +761,7 @@ router.post('/bulk-delete', async (req, res) => {
   await prisma.payment.deleteMany({ where: { invoiceId: { in: ids } } });
   await prisma.invoiceItem.deleteMany({ where: { invoiceId: { in: ids } } });
   const result = await prisma.invoice.deleteMany({ where: { id: { in: ids } } });
+  await logAudit(req, { action: 'INVOICE_BULK_DELETE', entityType: 'Invoice', entityId: null, details: { ids, deleted: result.count } });
 
   res.json({ ok: true, deleted: result.count });
 });
@@ -847,6 +855,7 @@ router.post('/:id/email', async (req, res) => {
       );
     }
 
+    await logAudit(req, { action: 'INVOICE_EMAIL_SEND', entityType: 'Invoice', entityId: id, details: { to: recipient, subject: emailSubject } });
     res.json({ ok: true, message: 'Invoice sent successfully' });
   } catch (error) {
     console.error('Error sending invoice email:', error);

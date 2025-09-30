@@ -6,6 +6,7 @@ const { prisma } = require('../lib/prisma');
 const { authenticate } = require('../middleware/auth');
 const { hasPermission } = require('../lib/permissions');
 
+const { logAudit } = require('../lib/audit');
 const router = Router();
 
 router.use(authenticate);
@@ -100,6 +101,7 @@ router.post('/', async (req, res) => {
       console.warn(`[STAFF CREATE] Credentials for ${created.email} -> temp password: ${tempPassword}`);
     }
 
+    await logAudit(req, { action: 'STAFF_CREATE', entityType: 'User', entityId: created.id, details: { email: created.email, role: created.role?.name } });
     return res.status(201).json({
       id: created.id,
       name: created.name,
@@ -212,6 +214,8 @@ router.patch('/:id', async (req, res) => {
       include: { role: { select: { name: true } } }
     });
 
+    await logAudit(req, { action: 'STAFF_UPDATE', entityType: 'User', entityId: id, details: { changed: data, roleChanged: Boolean(roleIdUpdate) } });
+
     return res.json({
       id: updated.id,
       name: updated.name,
@@ -245,6 +249,7 @@ router.delete('/:id', async (req, res) => {
     }
 
     await prisma.user.delete({ where: { id } });
+    await logAudit(req, { action: 'STAFF_DELETE', entityType: 'User', entityId: id, details: { email: target.email } });
     return res.status(204).send();
   } catch (err) {
     console.error('Delete staff error:', err);

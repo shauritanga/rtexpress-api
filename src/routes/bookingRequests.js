@@ -4,6 +4,7 @@ const { prisma } = require('../lib/prisma');
 const { authenticate } = require('../middleware/auth');
 const { hasPermission } = require('../lib/permissions');
 const { sendBookingNotification } = require('../lib/notifications');
+const { logAudit } = require('../lib/audit');
 
 const router = Router();
 
@@ -72,6 +73,7 @@ router.patch('/:id/status', async (req, res) => {
       console.log(`Booking ${id} status updated to ${status} - notification would be sent to requester`);
     }
 
+    await logAudit(req, { action: 'BOOKING_STATUS_UPDATE', entityType: 'BookingRequest', entityId: id, details: { to: status } });
     res.json(updated);
   } catch (error) {
     console.error('Update booking status error:', error);
@@ -158,6 +160,8 @@ router.post('/:id/convert-to-shipment', async (req, res) => {
     });
 
     await prisma.bookingRequest.update({ where: { id }, data: { status: 'converted' } });
+
+    await logAudit(req, { action: 'BOOKING_CONVERT_TO_SHIPMENT', entityType: 'BookingRequest', entityId: id, details: { shipmentId: shipment.id, trackingNumber } });
 
     res.status(201).json({ ok: true, shipmentId: shipment.id, trackingNumber });
   } catch (error) {

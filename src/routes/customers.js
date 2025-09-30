@@ -7,6 +7,7 @@ const { prisma } = require('../lib/prisma');
 const { hasPermission } = require('../lib/permissions');
 const { authenticate, requireRole } = require('../middleware/auth');
 
+const { logAudit } = require('../lib/audit');
 const router = Router();
 
 // Helper function to generate secure temporary password
@@ -443,6 +444,7 @@ router.post('/', requireRole('ADMIN', 'STAFF'), async (req, res) => {
       // Don't fail the customer creation if email fails
     }
 
+    await logAudit(req, { action: 'CUSTOMER_CREATE', entityType: 'Customer', entityId: customer.id, details: { email: customer.email, ownerId: user.id } });
     res.status(201).json({
       id: customer.id,
       customerNumber: customer.customerNumber,
@@ -509,6 +511,7 @@ router.patch('/:id', requireRole('ADMIN', 'STAFF'), async (req, res) => {
       }
     });
 
+    await logAudit(req, { action: 'CUSTOMER_UPDATE', entityType: 'Customer', entityId: id, details: { changed: data } });
     res.json({
       id: updatedCustomer.id,
       customerNumber: updatedCustomer.customerNumber,
@@ -779,6 +782,8 @@ router.delete('/:id', requireRole('ADMIN'), async (req, res) => {
         });
       }
     });
+
+    await logAudit(req, { action: 'CUSTOMER_DELETE', entityType: 'Customer', entityId: id, details: { ownerId: existingCustomer.owner?.id } });
 
     res.json({
       success: true,
