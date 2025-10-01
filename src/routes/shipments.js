@@ -42,6 +42,9 @@ const dateTransform = (fieldName) => z.string().optional().transform((val) => {
   return date.toISOString();
 });
 
+// Countries that have states/provinces (must match frontend)
+const countriesWithState = new Set(['US','CA','AU','IN','MX','BR','CN','RU','NG','ZA']);
+
 const createSchema = z.object({
   customerId: z.string(),
   description: z.string().min(1, 'Description is required'),
@@ -58,18 +61,47 @@ const createSchema = z.object({
   status: ShipmentStatus.default('Pending'),
   originStreet: z.string().min(1, 'Origin street is required'),
   originCity: z.string().min(1, 'Origin city is required'),
-  originState: z.string().min(1, 'Origin state is required'),
+  originState: z.string(),
   originZip: z.string().min(1, 'Origin zip is required'),
   originCountry: z.string().min(1, 'Origin country is required'),
   destStreet: z.string().min(1, 'Destination street is required'),
   destCity: z.string().min(1, 'Destination city is required'),
-  destState: z.string().min(1, 'Destination state is required'),
+  destState: z.string(),
   destZip: z.string().min(1, 'Destination zip is required'),
   destCountry: z.string().min(1, 'Destination country is required'),
   pickupDate: dateTransform('pickup date'),
   estimatedDelivery: dateTransform('estimated delivery date'),
   insuranceValue: z.number().nonnegative().optional(),
   signatureRequired: z.boolean().default(false),
+}).refine((data) => {
+  // Validate origin state based on origin country
+  if (countriesWithState.has(data.originCountry)) {
+    if (!data.originState || data.originState.trim() === '' || data.originState === '-') {
+      return false;
+    }
+  }
+  return true;
+}, {
+  message: "Origin state is required for countries with states",
+  path: ["originState"]
+}).refine((data) => {
+  // Validate destination state based on destination country
+  if (countriesWithState.has(data.destCountry)) {
+    if (!data.destState || data.destState.trim() === '' || data.destState === '-') {
+      return false;
+    }
+  }
+  return true;
+}, {
+  message: "Destination state is required for countries with states",
+  path: ["destState"]
+}).transform((data) => {
+  // Normalize states for countries without states
+  return {
+    ...data,
+    originState: countriesWithState.has(data.originCountry) ? data.originState : '-',
+    destState: countriesWithState.has(data.destCountry) ? data.destState : '-'
+  };
 });
 
 async function generateNextTrackingNumber() {

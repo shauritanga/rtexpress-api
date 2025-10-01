@@ -30,6 +30,7 @@ router.get('/', async (req, res) => {
     if (search) {
       const q = search.trim();
       where.OR = [
+        { id: { contains: q, mode: 'insensitive' } }, // Search by booking ID (request number)
         { fullName: { contains: q, mode: 'insensitive' } },
         { email: { contains: q, mode: 'insensitive' } },
         { phone: { contains: q, mode: 'insensitive' } },
@@ -82,6 +83,9 @@ router.patch('/:id/status', async (req, res) => {
   }
 });
 
+// Countries that have states/provinces (must match frontend and shipments.js)
+const countriesWithState = new Set(['US','CA','AU','IN','MX','BR','CN','RU','NG','ZA']);
+
 // Convert to shipment: requires an existing customerId and structured addresses in body
 const convertSchema = z.object({
   customerId: z.string(),
@@ -101,6 +105,35 @@ const convertSchema = z.object({
   destState: z.string(),
   destZip: z.string(),
   destCountry: z.string(),
+}).refine((data) => {
+  // Validate origin state based on origin country
+  if (countriesWithState.has(data.originCountry)) {
+    if (!data.originState || data.originState.trim() === '' || data.originState === '-') {
+      return false;
+    }
+  }
+  return true;
+}, {
+  message: "Origin state is required for countries with states",
+  path: ["originState"]
+}).refine((data) => {
+  // Validate destination state based on destination country
+  if (countriesWithState.has(data.destCountry)) {
+    if (!data.destState || data.destState.trim() === '' || data.destState === '-') {
+      return false;
+    }
+  }
+  return true;
+}, {
+  message: "Destination state is required for countries with states",
+  path: ["destState"]
+}).transform((data) => {
+  // Normalize states for countries without states
+  return {
+    ...data,
+    originState: countriesWithState.has(data.originCountry) ? data.originState : '-',
+    destState: countriesWithState.has(data.destCountry) ? data.destState : '-'
+  };
 });
 
 router.post('/:id/convert-to-shipment', async (req, res) => {

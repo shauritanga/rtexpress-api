@@ -231,7 +231,7 @@ model Payment {
 }
 
 model BookingRequest {
-  id               String    @id @default(cuid())
+  id               String    @id // This will be the request number like BR2025001
   fullName         String
   phone            String
   email            String

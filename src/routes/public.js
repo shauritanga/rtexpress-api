@@ -5,6 +5,34 @@ const nodemailer = require('nodemailer');
 const jwt = require('jsonwebtoken');
 const rateLimit = require('express-rate-limit');
 
+// Generate unique request number
+async function generateRequestNumber() {
+  const year = new Date().getFullYear();
+  const prefix = `BR${year}`;
+
+  // Find the highest existing request number for this year by looking at IDs
+  const lastRequest = await prisma.bookingRequest.findFirst({
+    where: {
+      id: {
+        startsWith: prefix
+      }
+    },
+    orderBy: {
+      id: 'desc'
+    }
+  });
+
+  let nextNumber = 1;
+  if (lastRequest) {
+    // Extract the number part and increment
+    const lastNumber = parseInt(lastRequest.id.replace(prefix, ''));
+    nextNumber = lastNumber + 1;
+  }
+
+  // Format with leading zeros (e.g., BR2025001, BR2025002, etc.)
+  return `${prefix}${nextNumber.toString().padStart(3, '0')}`;
+}
+
 
 const router = Router();
 
@@ -64,7 +92,16 @@ router.post('/booking-request', publicBookingLimiter, async (req, res) => {
       return res.status(400).json({ error: 'Invalid data', details: parsed.error.issues });
     }
 
-    const created = await prisma.bookingRequest.create({ data: { ...parsed.data, consentAt: new Date() } });
+    // Generate unique request number to use as ID
+    const requestNumber = await generateRequestNumber();
+
+    const created = await prisma.bookingRequest.create({
+      data: {
+        id: requestNumber, // Use request number as the primary ID
+        ...parsed.data,
+        consentAt: new Date()
+      }
+    });
 
     // Notify admins via email (if SMTP configured)
     try {
@@ -77,8 +114,9 @@ router.post('/booking-request', publicBookingLimiter, async (req, res) => {
         });
         const to = admins.map(a => a.email).filter(Boolean).join(',');
         if (to) {
-          const subject = `New Booking Request from ${created.fullName}`;
+          const subject = `New Booking Request ${created.id} from ${created.fullName}`;
           const lines = [
+            `Request Number: ${created.id}`,
             `Name: ${created.fullName}`,
             `Email: ${created.email}`,
             `Phone: ${created.phone}`,
@@ -90,9 +128,10 @@ router.post('/booking-request', publicBookingLimiter, async (req, res) => {
             `Received: ${created.createdAt.toISOString()}`,
           ].join('\n');
           const html = `<!doctype html><html><body style="font-family:Arial,sans-serif">`
-            + `<h2>New Booking Request</h2>`
+            + `<h2>New Booking Request ${created.id}</h2>`
             + `<p>A new booking request has been submitted.</p>`
             + `<ul>`
+            + `<li><strong>Request Number:</strong> ${created.id}</li>`
             + `<li><strong>Name:</strong> ${created.fullName}</li>`
             + `<li><strong>Email:</strong> ${created.email}</li>`
             + `<li><strong>Phone:</strong> ${created.phone}</li>`
@@ -106,7 +145,7 @@ router.post('/booking-request', publicBookingLimiter, async (req, res) => {
           await transporter.sendMail({ from: SMTP_FROM || SMTP_USER, to, subject, text: lines, html });
           if (!['off','0','false','no'].includes(ackOn)) {
             const ackSubject = 'We received your shipment request';
-            const ackText = `Hi ${created.fullName},\n\nThank you for your request. Your reference ID is ${created.id}. Our team will contact you shortly.\n\n— RT Express Team`;
+            const ackText = `Hi ${created.fullName},\n\nThank you for your request. Your reference number is ${created.id}. Our team will contact you shortly.\n\n— RT Express Team`;
             try { await transporter.sendMail({ from: SMTP_FROM || SMTP_USER, to: created.email, subject: ackSubject, text: ackText }); } catch {}
           }
         }
