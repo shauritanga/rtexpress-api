@@ -7,6 +7,7 @@ const { hasPermission } = require('../lib/permissions');
 const PDFDocument = require('pdfkit');
 const nodemailer = require('nodemailer');
 const fs = require('fs');
+const path = require('path');
 const { sendInvoiceNotification, sendPaymentNotification } = require('../lib/notifications');
 
 const bwipjs = require('bwip-js');
@@ -36,6 +37,33 @@ function isBarcodeEnabled() {
   const v = (process.env.INVOICE_BARCODE || '').toLowerCase();
   if (!v) return true; // default on
   return !['0','false','off','no'].includes(v);
+}
+
+// Helper function to load company logo
+function loadCompanyLogo() {
+  try {
+    // Try multiple possible logo locations and formats
+    const possibleLogoPaths = [
+      path.join(__dirname, '../../assets/images/rt-express-logo.png'),
+      path.join(__dirname, '../../assets/images/logo.png'),
+      path.join(__dirname, '../../assets/images/rt-express-logo.jpg'),
+      path.join(__dirname, '../../assets/images/logo.jpg'),
+      path.join(__dirname, '../../uploads/logo.png'),
+      path.join(__dirname, '../../uploads/rt-express-logo.png')
+    ];
+
+    for (const logoPath of possibleLogoPaths) {
+      if (fs.existsSync(logoPath)) {
+        return logoPath;
+      }
+    }
+
+    console.log('Company logo not found. Checked paths:', possibleLogoPaths);
+    return null;
+  } catch (error) {
+    console.error('Error loading company logo:', error);
+    return null;
+  }
 }
 
 function drawLabel(doc, x, y, text) {
@@ -111,13 +139,44 @@ function drawRTExpressAirwaybill(doc, invoice, shipment, barcode) {
 
   // Company logo and name (left side)
   const logoWidth = 150;
-  doc.save();
-  doc.fillColor(brandColor).fontSize(28).font('Helvetica-Bold');
-  doc.text('RT EXPRESS', margin, currentY + 10);
-  doc.fontSize(12).font('Helvetica');
-  doc.fillColor('#666');
-  doc.text('Real Time Express Logistics', margin, currentY + 45);
-  doc.restore();
+  const logoHeight = 60;
+
+  // Try to load and display company logo
+  const logoPath = loadCompanyLogo();
+  let logoDisplayed = false;
+
+  if (logoPath) {
+    try {
+      // Display the logo image
+      doc.image(logoPath, margin, currentY + 5, {
+        width: logoWidth,
+        height: logoHeight,
+        fit: [logoWidth, logoHeight],
+        align: 'left'
+      });
+      logoDisplayed = true;
+
+      // Add company tagline below logo
+      doc.save();
+      doc.fontSize(10).font('Helvetica').fillColor('#666');
+      doc.text('Real Time Express Logistics', margin, currentY + logoHeight + 10);
+      doc.restore();
+    } catch (error) {
+      console.error('Error displaying logo in PDF:', error);
+      logoDisplayed = false;
+    }
+  }
+
+  // Fallback to text-based header if logo not available
+  if (!logoDisplayed) {
+    doc.save();
+    doc.fillColor(brandColor).fontSize(28).font('Helvetica-Bold');
+    doc.text('RT EXPRESS', margin, currentY + 10);
+    doc.fontSize(12).font('Helvetica');
+    doc.fillColor('#666');
+    doc.text('Real Time Express Logistics', margin, currentY + 45);
+    doc.restore();
+  }
 
   // Invoice title and number (right side)
   const rightSectionX = margin + innerW - 200;

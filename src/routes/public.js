@@ -10,24 +10,17 @@ async function generateRequestNumber() {
   const year = new Date().getFullYear();
   const prefix = `BR${year}`;
 
-  // Find the highest existing request number for this year by looking at IDs
-  const lastRequest = await prisma.bookingRequest.findFirst({
+  // Count existing requests for this year to determine next number
+  const existingCount = await prisma.bookingRequest.count({
     where: {
       id: {
         startsWith: prefix
       }
-    },
-    orderBy: {
-      id: 'desc'
     }
   });
 
-  let nextNumber = 1;
-  if (lastRequest) {
-    // Extract the number part and increment
-    const lastNumber = parseInt(lastRequest.id.replace(prefix, ''));
-    nextNumber = lastNumber + 1;
-  }
+  // Start from 1 and increment based on count
+  const nextNumber = existingCount + 1;
 
   // Format with leading zeros (e.g., BR2025001, BR2025002, etc.)
   return `${prefix}${nextNumber.toString().padStart(3, '0')}`;
@@ -38,14 +31,48 @@ const router = Router();
 
 // Public booking request — CSRF + create + notify
 const bookingSchema = z.object({
-  fullName: z.string().trim().min(2, 'Full name is required').max(120),
+  // Customer type and basic info
+  customerType: z.enum(['INDIVIDUAL', 'BUSINESS']).default('INDIVIDUAL'),
+
+  // Individual customer fields
+  firstName: z.string().trim().min(1, 'First name is required').max(60).optional(),
+  lastName: z.string().trim().min(1, 'Last name is required').max(60).optional(),
+
+  // Business customer fields
+  companyName: z.string().trim().min(1, 'Company name is required').max(120).optional(),
+  contactPerson: z.string().trim().min(1, 'Contact person is required').max(120).optional(),
+  taxId: z.string().trim().max(50).optional(),
+
+  // Common contact information
   phone: z.string().trim().min(6, 'Phone is required').max(32),
   email: z.string().trim().email('Valid email is required').max(160),
+
+  // Address information
+  street: z.string().trim().min(1, 'Street address is required').max(255).optional(),
+  city: z.string().trim().min(1, 'City is required').max(100).optional(),
+  state: z.string().trim().max(100).optional(),
+  zipCode: z.string().trim().max(20).optional(),
+  country: z.string().trim().min(1, 'Country is required').max(100).optional(),
+
+  // Shipment details
   itemDescription: z.string().trim().min(1, 'Item description is required').max(1000),
   pickupLocation: z.string().trim().min(1, 'Pickup location is required').max(255),
   deliveryLocation: z.string().trim().min(1, 'Delivery location is required').max(255),
   notes: z.string().trim().max(1000).optional(),
+
+  // System fields
   consent: z.literal(true, { errorMap: () => ({ message: 'Consent is required' }) }),
+}).refine((data) => {
+  // Validate based on customer type
+  if (data.customerType === 'INDIVIDUAL') {
+    return data.firstName && data.lastName;
+  } else if (data.customerType === 'BUSINESS') {
+    return data.companyName && data.contactPerson;
+  }
+  return false;
+}, {
+  message: 'Required fields missing for selected customer type',
+  path: ['customerType']
 });
 
 function getTransporter() {
@@ -114,12 +141,24 @@ router.post('/booking-request', publicBookingLimiter, async (req, res) => {
         });
         const to = admins.map(a => a.email).filter(Boolean).join(',');
         if (to) {
-          const subject = `New Booking Request ${created.id} from ${created.fullName}`;
+          // Generate customer name based on type
+          const customerName = created.customerType === 'INDIVIDUAL'
+            ? `${created.firstName} ${created.lastName}`
+            : `${created.companyName} (Contact: ${created.contactPerson})`;
+
+          const subject = `New Booking Request ${created.id} from ${customerName}`;
           const lines = [
             `Request Number: ${created.id}`,
-            `Name: ${created.fullName}`,
+            `Customer Type: ${created.customerType}`,
+            created.customerType === 'INDIVIDUAL'
+              ? `Name: ${created.firstName} ${created.lastName}`
+              : `Company: ${created.companyName}`,
+            created.customerType === 'BUSINESS' && created.contactPerson
+              ? `Contact Person: ${created.contactPerson}` : '',
+            created.taxId ? `Tax ID: ${created.taxId}` : '',
             `Email: ${created.email}`,
             `Phone: ${created.phone}`,
+            created.street ? `Address: ${created.street}, ${created.city}, ${created.state} ${created.zipCode}, ${created.country}` : '',
             `Pickup: ${created.pickupLocation}`,
             `Delivery: ${created.deliveryLocation}`,
             `Item: ${created.itemDescription}`,
@@ -132,9 +171,16 @@ router.post('/booking-request', publicBookingLimiter, async (req, res) => {
             + `<p>A new booking request has been submitted.</p>`
             + `<ul>`
             + `<li><strong>Request Number:</strong> ${created.id}</li>`
-            + `<li><strong>Name:</strong> ${created.fullName}</li>`
+            + `<li><strong>Customer Type:</strong> ${created.customerType}</li>`
+            + (created.customerType === 'INDIVIDUAL'
+                ? `<li><strong>Name:</strong> ${created.firstName} ${created.lastName}</li>`
+                : `<li><strong>Company:</strong> ${created.companyName}</li>`)
+            + (created.customerType === 'BUSINESS' && created.contactPerson
+                ? `<li><strong>Contact Person:</strong> ${created.contactPerson}</li>` : '')
+            + (created.taxId ? `<li><strong>Tax ID:</strong> ${created.taxId}</li>` : '')
             + `<li><strong>Email:</strong> ${created.email}</li>`
             + `<li><strong>Phone:</strong> ${created.phone}</li>`
+            + (created.street ? `<li><strong>Address:</strong> ${created.street}, ${created.city}, ${created.state} ${created.zipCode}, ${created.country}</li>` : '')
             + `<li><strong>Pickup:</strong> ${created.pickupLocation}</li>`
             + `<li><strong>Delivery:</strong> ${created.deliveryLocation}</li>`
             + `<li><strong>Item:</strong> ${created.itemDescription}</li>`
@@ -142,10 +188,13 @@ router.post('/booking-request', publicBookingLimiter, async (req, res) => {
             + `</ul>`
             + `</body></html>`;
           const { SMTP_FROM, SMTP_USER } = process.env;
-          await transporter.sendMail({ from: SMTP_FROM || SMTP_USER, to, subject, text: lines, html });
+          await transporter.sendMail({ from: SMTP_FROM || SMTP_USER, to, subject, text: lines.filter(Boolean).join('\n'), html });
           if (!['off','0','false','no'].includes(ackOn)) {
             const ackSubject = 'We received your shipment request';
-            const ackText = `Hi ${created.fullName},\n\nThank you for your request. Your reference number is ${created.id}. Our team will contact you shortly.\n\n— RT Express Team`;
+            const customerName = created.customerType === 'INDIVIDUAL'
+              ? `${created.firstName} ${created.lastName}`
+              : created.contactPerson || created.companyName;
+            const ackText = `Hi ${customerName},\n\nThank you for your request. Your reference number is ${created.id}. Our team will contact you shortly.\n\n— RT Express Team`;
             try { await transporter.sendMail({ from: SMTP_FROM || SMTP_USER, to: created.email, subject: ackSubject, text: ackText }); } catch {}
           }
         }

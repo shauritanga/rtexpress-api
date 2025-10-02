@@ -231,22 +231,51 @@ model Payment {
 }
 
 model BookingRequest {
-  id               String    @id // This will be the request number like BR2025001
-  fullName         String
-  phone            String
-  email            String
+  id String @id // This will be the request number like BR2025001
+
+  // Customer type and basic info
+  customerType CustomerType @default(INDIVIDUAL)
+
+  // Individual customer fields
+  firstName String?
+  lastName  String?
+
+  // Business customer fields
+  companyName   String?
+  contactPerson String?
+  taxId         String?
+
+  // Common contact information
+  phone String
+  email String
+
+  // Address information
+  street  String?
+  city    String?
+  state   String?
+  zipCode String?
+  country String?
+
+  // Shipment details
   itemDescription  String
   pickupLocation   String
   deliveryLocation String
   notes            String?
-  consent          Boolean   @default(false)
-  consentAt        DateTime?
-  status           String    @default("pending") // pending | confirmed | rejected | completed | converted
-  createdAt        DateTime  @default(now())
-  updatedAt        DateTime  @updatedAt
+
+  // System fields
+  consent   Boolean   @default(false)
+  consentAt DateTime?
+  status    String    @default("pending") // pending | confirmed | rejected | completed | converted
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+
+  // Link to converted customer (if applicable)
+  convertedCustomerId String?
 
   @@index([status])
   @@index([createdAt])
+  @@index([customerType])
+  @@index([email])
 }
 
 model OtpCode {
