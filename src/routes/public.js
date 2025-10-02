@@ -114,6 +114,14 @@ router.post('/booking-request', publicBookingLimiter, async (req, res) => {
       }
     }
 
+    // BACKWARD COMPATIBILITY: Handle old 'fullname' field if present
+    if (req.body.fullname && !req.body.firstName && !req.body.lastName) {
+      const nameParts = String(req.body.fullname).trim().split(' ');
+      req.body.firstName = nameParts[0] || '';
+      req.body.lastName = nameParts.slice(1).join(' ') || nameParts[0] || '';
+      delete req.body.fullname;
+    }
+
     const parsed = bookingSchema.safeParse(req.body);
     if (!parsed.success) {
       return res.status(400).json({ error: 'Invalid data', details: parsed.error.issues });
